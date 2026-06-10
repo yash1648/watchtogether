@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: watchtogether-server
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: CLIENT_URL
+        value: https://your-vercel-app.vercel.app
+      - key: NODE_ENV
+        value: production

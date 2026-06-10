@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WatchTogether</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<!-- ═══════════════════════════════ LOBBY ═══════════════════════════════ -->
+<div id="lobby">
+  <div class="lobby-inner">
+    <div class="logo">Watch<span>Together</span></div>
+    <p class="logo-sub">Watch anything with friends — screen share, YouTube, react together.</p>
+
+    <div class="lobby-card">
+      <div class="input-group">
+        <label>Your name</label>
+        <input id="inp-name" type="text" placeholder="e.g. Alex" maxlength="20" autocomplete="off" />
+      </div>
+
+      <button class="btn btn-primary" id="btn-create">✦ Create a room</button>
+
+      <div class="divider">or join existing</div>
+
+      <div class="input-group">
+        <label>Room code</label>
+        <input id="inp-code" type="text" placeholder="e.g. ABCD12" maxlength="6" autocomplete="off" />
+      </div>
+      <button class="btn btn-outline" id="btn-join">Join room →</button>
+      <p class="err-msg" id="lobby-err"></p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ ROOM ════════════════════════════════ -->
+<div id="room" class="hidden">
+
+  <!-- Header -->
+  <header class="room-header">
+    <div class="h-left">
+      <span class="logo-sm">Watch<strong>Together</strong></span>
+      <span class="room-code" id="hdr-code" title="Click to copy"></span>
+    </div>
+    <div class="h-center" id="h-status"></div>
+    <div class="h-right">
+      <span class="viewers-badge"><span class="live-dot"></span><span id="viewer-count">1</span></span>
+      <button class="btn btn-outline btn-sm" id="btn-leave">Leave</button>
+    </div>
+  </header>
+
+  <!-- Body -->
+  <div class="room-body">
+
+    <!-- LEFT: Video + Controls -->
+    <div class="video-col">
+
+      <!-- Video stage -->
+      <div class="video-stage" id="video-stage">
+        <!-- Screen share view -->
+        <video id="screen-video" autoplay playsinline class="hidden"></video>
+        <!-- YouTube embed -->
+        <div id="yt-wrap" class="hidden">
+          <iframe id="yt-frame" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+        </div>
+        <!-- Empty state -->
+        <div class="stage-empty" id="stage-empty">
+          <div class="empty-icon">🎬</div>
+          <p>Share your screen or load a YouTube video</p>
+          <p class="empty-sub">Use the controls below to get started</p>
+        </div>
+        <!-- Sharer label -->
+        <div class="sharer-label hidden" id="sharer-label"></div>
+      </div>
+
+      <!-- Controls -->
+      <div class="controls-bar">
+        <div class="ctrl-group">
+          <button class="ctrl-btn" id="btn-screenshare">
+            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            Share Screen
+          </button>
+          <button class="ctrl-btn hidden" id="btn-stop-share">
+            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+            Stop Sharing
+          </button>
+        </div>
+        <div class="ctrl-group yt-group">
+          <input id="inp-yt" type="text" placeholder="Paste YouTube URL…" class="yt-input" />
+          <button class="ctrl-btn ctrl-btn-accent" id="btn-load-yt">Load</button>
+        </div>
+        <div class="ctrl-group" id="yt-controls" style="display:none">
+          <button class="ctrl-btn" id="btn-play">▶ Play</button>
+          <button class="ctrl-btn" id="btn-pause">⏸ Pause</button>
+          <button class="ctrl-btn" id="btn-sync">⟳ Sync all</button>
+        </div>
+      </div>
+
+      <!-- Reactions bar -->
+      <div class="reactions-bar">
+        <span class="reactions-lbl">React:</span>
+        <button class="r-btn" data-e="🔥">🔥</button>
+        <button class="r-btn" data-e="😂">😂</button>
+        <button class="r-btn" data-e="😮">😮</button>
+        <button class="r-btn" data-e="❤️">❤️</button>
+        <button class="r-btn" data-e="👏">👏</button>
+        <button class="r-btn" data-e="💀">💀</button>
+        <button class="r-btn" data-e="🤯">🤯</button>
+        <button class="r-btn" data-e="👍">👍</button>
+      </div>
+    </div>
+
+    <!-- RIGHT: Chat + Members -->
+    <aside class="chat-col">
+      <div class="tabs">
+        <button class="tab active" data-tab="chat">Chat</button>
+        <button class="tab" data-tab="members">Members</button>
+      </div>
+
+      <!-- Chat panel -->
+      <div class="panel active" id="panel-chat">
+        <div class="messages" id="messages"></div>
+        <div class="chat-footer">
+          <div class="chat-input-row">
+            <input id="inp-chat" type="text" placeholder="Message…" autocomplete="off" />
+            <button id="btn-send">
+              <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Members panel -->
+      <div class="panel" id="panel-members">
+        <div class="members-list" id="members-list"></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- Floating reactions container -->
+<div id="float-zone"></div>
+<!-- Toast -->
+<div id="toast"></div>
+
+<script type="module" src="/main.js"></script>
+</body>
+</html>
