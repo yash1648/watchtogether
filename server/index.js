@@ -166,6 +166,25 @@ io.on("connection", (socket) => {
     io.to(to).emit("rtc-ice", { from: socket.id, candidate });
   });
 
+  // Audio signaling
+  socket.on("audio-offer", ({ to, offer }) => {
+    io.to(to).emit("audio-offer", { from: socket.id, offer });
+  });
+
+  socket.on("audio-answer", ({ to, answer }) => {
+    io.to(to).emit("audio-answer", { from: socket.id, answer });
+  });
+
+  socket.on("audio-ice", ({ to, candidate }) => {
+    io.to(to).emit("audio-ice", { from: socket.id, candidate });
+  });
+
+  // Mic status toggle
+  socket.on("mic-toggle", ({ enabled }) => {
+    if (!currentRoom) return;
+    socket.to(currentRoom).emit("mic-toggle", { userId: socket.id, username: currentUser?.username, enabled });
+  });
+
   // Request sync (new joiner asks host for current time)
   socket.on("request-sync", () => {
     if (!currentRoom) return;

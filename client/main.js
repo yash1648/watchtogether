@@ -17,6 +17,9 @@ const state = {
   ytReady: false,
   ytVideoId: null,
   members: [],
+  micStream: null,
+  micEnabled: false,
+  audioPeers: {},
 };
 
 const COLORS = [
@@ -208,6 +211,127 @@ function stopScreenShare() {
   }
 }
 
+// ─── AUDIO (VOICE CHAT) ─────────────────────────────────────────────────────
+async function initMic(initiatePeers = false) {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    state.micStream = stream;
+    state.micEnabled = true;
+
+    if (initiatePeers) {
+      // Late mic enable — send offers to existing members
+      for (const member of state.members) {
+        if (member.id !== state.socket.id && !state.audioPeers[member.id]) {
+          createAudioPeer(member.id, true);
+        }
+      }
+    }
+    // On initial join, we don't initiate — existing members receive
+    // peer-joined and send audio-offers to us instead.
+
+    updateMicUI();
+  } catch (e) {
+    console.warn("Mic access denied or unavailable:", e.message);
+    state.micStream = null;
+    state.micEnabled = false;
+    updateMicUI();
+  }
+}
+
+async function createAudioPeer(peerId, initiator) {
+  // Close existing peer if any
+  if (state.audioPeers[peerId]) {
+    state.audioPeers[peerId].close();
+    delete state.audioPeers[peerId];
+  }
+
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+  state.audioPeers[peerId] = pc;
+
+  pc.onicecandidate = ({ candidate }) => {
+    if (candidate) {
+      state.socket.emit("audio-ice", { to: peerId, candidate });
+    }
+  };
+
+  pc.ontrack = (e) => {
+    const audioId = `audio-${peerId}`;
+    let audio = document.getElementById(audioId);
+    if (!audio) {
+      audio = document.createElement("audio");
+      audio.id = audioId;
+      audio.autoplay = true;
+      audio.style.display = "none";
+      document.body.appendChild(audio);
+    }
+    if (e.streams && e.streams[0]) {
+      audio.srcObject = e.streams[0];
+    }
+  };
+
+  pc.onconnectionstatechange = () => {
+    if (["disconnected", "failed", "closed"].includes(pc.connectionState)) {
+      pc.close();
+      delete state.audioPeers[peerId];
+      const audioEl = document.getElementById(`audio-${peerId}`);
+      if (audioEl) audioEl.remove();
+    }
+  };
+
+  // Add local mic tracks
+  if (state.micStream && state.micEnabled) {
+    state.micStream.getTracks().forEach((t) => pc.addTrack(t, state.micStream));
+  }
+
+  if (initiator) {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    state.socket.emit("audio-offer", { to: peerId, offer });
+  }
+
+  return pc;
+}
+
+function closeAllAudioPeers() {
+  for (const peerId of Object.keys(state.audioPeers)) {
+    state.audioPeers[peerId]?.close();
+    delete state.audioPeers[peerId];
+    const audioEl = document.getElementById(`audio-${peerId}`);
+    if (audioEl) audioEl.remove();
+  }
+}
+
+function toggleMic() {
+  if (!state.micStream) {
+    // First-time mic access (late enable) — create audio peers to existing members
+    initMic(true);
+    return;
+  }
+  state.micEnabled = !state.micEnabled;
+  state.micStream.getAudioTracks().forEach((t) => {
+    t.enabled = state.micEnabled;
+  });
+  state.socket.emit("mic-toggle", { enabled: state.micEnabled });
+  updateMicUI();
+}
+
+function updateMicUI() {
+  const btn = $("btn-mic");
+  const icon = document.getElementById("mic-icon");
+  const label = document.getElementById("mic-label");
+  if (state.micEnabled && state.micStream) {
+    btn.classList.remove("muted");
+    icon.innerHTML = `<rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/>`;
+    label.textContent = "Mic";
+  } else {
+    btn.classList.add("muted");
+    icon.innerHTML = `<line x1="2" y1="2" x2="22" y2="22"/><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/>`;
+    label.textContent = "Muted";
+  }
+}
+
 // ─── MESSAGES ────────────────────────────────────────────────────────────────
 function addMessage(msg) {
   const el = $("messages");
@@ -303,14 +427,20 @@ function setupSocket() {
 
   // WebRTC: someone joined, I should initiate
   socket.on("peer-joined", async ({ peerId }) => {
-    if (!state.isSharing) return;
-    await createPeer(peerId, true);
+    // Screen share
+    if (state.isSharing) {
+      await createPeer(peerId, true);
+    }
+    // Voice chat
+    if (state.micStream && state.micEnabled) {
+      await createAudioPeer(peerId, true);
+    }
   });
 
   socket.on("peer-left", ({ peerId }) => {
+    // Screen share cleanup
     state.peers[peerId]?.close();
     delete state.peers[peerId];
-    // If they were sharing, clear video
     const video = $("screen-video");
     if (video.srcObject) {
       const activeTracks = Array.from(video.srcObject.getTracks()).filter(t => t.readyState === "live");
@@ -321,6 +451,11 @@ function setupSocket() {
         if (!state.ytVideoId) $("stage-empty").classList.remove("hidden");
       }
     }
+    // Audio peer cleanup
+    state.audioPeers[peerId]?.close();
+    delete state.audioPeers[peerId];
+    const audioEl = document.getElementById(`audio-${peerId}`);
+    if (audioEl) audioEl.remove();
   });
 
   // WebRTC signaling
@@ -341,6 +476,37 @@ function setupSocket() {
     const pc = state.peers[from];
     if (pc && candidate) {
       try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+    }
+  });
+
+  // Audio signaling
+  socket.on("audio-offer", async ({ from, offer }) => {
+    if (!state.micStream) return;
+    const pc = await createAudioPeer(from, false);
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit("audio-answer", { to: from, answer });
+  });
+
+  socket.on("audio-answer", async ({ from, answer }) => {
+    const pc = state.audioPeers[from];
+    if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
+  });
+
+  socket.on("audio-ice", async ({ from, candidate }) => {
+    const pc = state.audioPeers[from];
+    if (pc && candidate) {
+      try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+    }
+  });
+
+  // Mic status broadcast
+  socket.on("mic-toggle", ({ userId, username, enabled }) => {
+    if (enabled) {
+      showToast(`${username} turned on mic`);
+    } else {
+      showToast(`${username} muted mic`);
     }
   });
 
@@ -441,6 +607,13 @@ function leaveRoom() {
   stopScreenShare();
   for (const pc of Object.values(state.peers)) pc.close();
   state.peers = {};
+  // Cleanup audio
+  closeAllAudioPeers();
+  if (state.micStream) {
+    state.micStream.getTracks().forEach((t) => t.stop());
+    state.micStream = null;
+  }
+  state.micEnabled = false;
   state.socket?.disconnect();
   state.socket = null;
   state.ytPlayer = null;
@@ -480,6 +653,7 @@ function setupUI() {
         if (resp?.error) { $("lobby-err").textContent = resp.error; return; }
         state.roomHostId = state.socket.id;
         enterRoom(code, true, null, resp.members);
+        initMic();
       });
     } catch {
       $("lobby-err").textContent = "Could not connect to server. Is it running?";
@@ -500,6 +674,7 @@ function setupUI() {
       if (resp?.error) { $("lobby-err").textContent = resp.error; return; }
       loadYouTubeAPI();
       enterRoom(code, resp.isHost, resp.video, resp.members);
+      initMic();
       if (resp.video) {
         const trySync = setInterval(() => {
           if (state.ytReady) {
@@ -521,6 +696,9 @@ function setupUI() {
 
   // Leave
   $("btn-leave").onclick = leaveRoom;
+
+  // Mic toggle
+  $("btn-mic").onclick = toggleMic;
 
   // Screen share
   $("btn-screenshare").onclick = startScreenShare;
