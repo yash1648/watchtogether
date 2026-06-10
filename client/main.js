@@ -262,12 +262,19 @@ async function createAudioPeer(peerId, initiator) {
     if (!audio) {
       audio = document.createElement("audio");
       audio.id = audioId;
-      audio.autoplay = true;
       audio.style.display = "none";
       document.body.appendChild(audio);
     }
     if (e.streams && e.streams[0]) {
       audio.srcObject = e.streams[0];
+      audio.play().catch((err) => {
+        // Autoplay may be blocked — play on first user interaction instead
+        const playOnInteraction = () => {
+          audio.play().catch(() => {});
+          document.removeEventListener("click", playOnInteraction);
+        };
+        document.addEventListener("click", playOnInteraction, { once: true });
+      });
     }
   };
 
@@ -431,7 +438,7 @@ function setupSocket() {
     if (state.isSharing) {
       await createPeer(peerId, true);
     }
-    // Voice chat
+    // Voice chat — existing member initiates to new member
     if (state.micStream && state.micEnabled) {
       await createAudioPeer(peerId, true);
     }
@@ -481,7 +488,14 @@ function setupSocket() {
 
   // Audio signaling
   socket.on("audio-offer", async ({ from, offer }) => {
-    if (!state.micStream) return;
+    // If mic stream isn't ready yet, wait briefly for it
+    if (!state.micStream) {
+      for (let i = 0; i < 25; i++) {
+        await new Promise((r) => setTimeout(r, 200));
+        if (state.micStream) break;
+      }
+    }
+    if (!state.micStream) return; // still no mic — skip
     const pc = await createAudioPeer(from, false);
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
     const answer = await pc.createAnswer();
@@ -503,11 +517,8 @@ function setupSocket() {
 
   // Mic status broadcast
   socket.on("mic-toggle", ({ userId, username, enabled }) => {
-    if (enabled) {
-      showToast(`${username} turned on mic`);
-    } else {
-      showToast(`${username} muted mic`);
-    }
+    const label = enabled ? "unmuted" : "muted";
+    showToast(`${username} ${label} their mic`);
   });
 
   // Screen share notifications
@@ -646,6 +657,9 @@ function setupUI() {
     state.color = COLORS[Math.floor(Math.random() * COLORS.length)];
     $("lobby-err").textContent = "";
 
+    // Get mic ready BEFORE joining, so audio-offers don't race us
+    await initMic();
+
     try {
       const res = await fetch(`${SERVER_URL}/api/rooms`, { method: "POST" });
       const { code } = await res.json();
@@ -653,7 +667,6 @@ function setupUI() {
         if (resp?.error) { $("lobby-err").textContent = resp.error; return; }
         state.roomHostId = state.socket.id;
         enterRoom(code, true, null, resp.members);
-        initMic();
       });
     } catch {
       $("lobby-err").textContent = "Could not connect to server. Is it running?";
@@ -661,7 +674,7 @@ function setupUI() {
   };
 
   // Lobby: join
-  $("btn-join").onclick = () => {
+  $("btn-join").onclick = async () => {
     const name = $("inp-name").value.trim();
     const code = $("inp-code").value.trim().toUpperCase();
     if (!name) { $("inp-name").focus(); return; }
@@ -670,11 +683,13 @@ function setupUI() {
     state.color = COLORS[Math.floor(Math.random() * COLORS.length)];
     $("lobby-err").textContent = "";
 
+    // Get mic ready BEFORE joining, so audio-offers don't race us
+    await initMic();
+
     state.socket.emit("join-room", { code, username: name, color: state.color }, (resp) => {
       if (resp?.error) { $("lobby-err").textContent = resp.error; return; }
       loadYouTubeAPI();
       enterRoom(code, resp.isHost, resp.video, resp.members);
-      initMic();
       if (resp.video) {
         const trySync = setInterval(() => {
           if (state.ytReady) {
